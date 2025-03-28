@@ -1,0 +1,100 @@
+---
+title: "Midterm Project"
+author: "Yiran Xu, Xiaoni Xu"
+date: "2025-03-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+1.Feature selection -- 正则，cv
+2.check colinearlity -- ANOVA? -- add interaction term 
+```{r}
+# =============================
+# 1. Load packages and data
+# =============================
+library(tidyverse)
+library(earth)        # MARS 模型
+library(caret)        # train() + 交叉验证
+library(car)          # vif 检查
+library(ggplot2)
+```
+
+
+```{r}
+# 读取数据
+load("dat1.RData")
+load("dat2.RData")
+
+# =============================
+# 2. 数据预处理函数
+# =============================
+preprocess_data <- function(df) {
+  df$gender <- factor(df$gender, levels = c(0, 1), labels = c("Female", "Male"))
+  df$race <- factor(df$race, levels = c(1, 2, 3, 4), labels = c("White", "Asian", "Black", "Hispanic"))
+  df$smoking <- factor(df$smoking, levels = c(0, 1, 2), labels = c("Never", "Former", "Current"))
+  df$diabetes <- factor(df$diabetes, levels = c(0, 1))
+  df$hypertension <- factor(df$hypertension, levels = c(0, 1))
+  df <- df %>% dplyr::select(-id)
+  return(df)
+}
+
+dat1_clean <- preprocess_data(dat1)
+dat2_clean <- preprocess_data(dat2)
+
+
+# =============================
+# 3. 拟合 MARS 模型 + 交叉验证
+# =============================
+set.seed(123)
+cv_results <- train(
+  log_antibody ~ .,
+  data = dat1_clean,
+  method = "earth",
+  tuneGrid = expand.grid(degree = 2, nprune = 2:20),
+  trControl = trainControl(method = "cv", number = 10)
+)
+
+# 查看最佳模型
+cv_results$bestTune
+final_mars <- cv_results$finalModel
+
+# 变量重要性
+evimp(final_mars)
+
+# =============================
+# 4. 用训练集的 terms 编码测试集（核心部分）
+# =============================
+# 提取训练集 terms（用于 dummy 编码）
+train_terms <- terms(log_antibody ~ ., data = dat1_clean)
+
+# 生成 dat2 的模型矩阵，并去掉 intercept
+X_test <- model.matrix(train_terms, data = dat2_clean)[, -1]
+
+# =============================
+# 5. 预测 + 评估泛化性能
+# =============================
+# 预测
+preds <- predict(final_mars, newdata = X_test)
+actual <- dat2_clean$log_antibody
+
+# 计算 RMSE 和 R²
+rmse <- sqrt(mean((preds - actual)^2))
+r2 <- 1 - sum((preds - actual)^2) / sum((actual - mean(actual))^2)
+
+cat("✅ Test Set RMSE:", round(rmse, 3), "\n")
+cat("✅ Test Set R²:", round(r2, 3), "\n")
+
+# =============================
+# 6. 可视化：预测 vs 实际值
+# =============================
+ggplot(data.frame(actual, preds), aes(x = actual, y = preds)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Predicted vs Actual log_antibody on Test Set",
+       x = "Actual log_antibody", y = "Predicted log_antibody") +
+  theme_minimal()
+
+```
